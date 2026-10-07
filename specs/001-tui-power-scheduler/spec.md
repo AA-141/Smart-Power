@@ -1,0 +1,191 @@
+# Feature Specification: Interactive TUI Power Action Scheduler
+
+**Feature Branch**: `001-tui-power-scheduler`  
+**Created**: 2026-09-30  
+**Last Clarified**: 2026-09-30  
+**Status**: Complete (Converged)  
+**Input**: User description: "Build Smart Power, a Windows desktop utility with a fully interactive terminal user interface (TUI) for scheduling system power actions."
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Configure and Confirm Scheduled Power Action (Priority: P1)
+
+A user opens Smart Power from their terminal or desktop shortcut, navigates an interactive wizard to configure an exact or relative time, selects a power action, confirms their intent on a dedicated review screen, and enters a live countdown view.
+
+**Why this priority**: This represents the core value proposition of the utility—allowing users to easily and reliably schedule Windows power actions without typing complex command-line flags.
+
+**Independent Test**: Run Smart Power, select a 5-minute relative duration, choose "Lock", confirm the operation, and verify the UI transitions to the active countdown screen showing accurate remaining time.
+
+**Acceptance Scenarios**:
+
+1. **Given** Smart Power is launched and no schedule is active, **When** the home screen renders, **Then** the user is prompted to choose a time specification mode: "Relative Duration" (e.g., in minutes/hours) or "Exact Clock Time" (e.g., 3:00 PM).
+2. **Given** "Relative Duration" is selected, **When** the user enters or selects a duration (e.g., 25 minutes), **Then** the value is validated for positive non-zero time and the action selection view is presented.
+3. **Given** "Exact Clock Time" is selected, **When** the user inputs a target clock time that has already passed today (e.g., 2:00 PM entered at 4:00 PM), **Then** the system automatically rolls over to the next day (+24h) and clearly displays "Tomorrow at [Time]".
+4. **Given** a valid time is selected, **When** the action selection view is shown, **Then** four primary actions are offered: Shutdown, Sleep, Restart, and Lock.
+5. **Given** an action is chosen, **When** advancing to confirmation, **Then** a high-visibility summary dialog displays the target action, execution time, and total countdown duration, requiring explicit user confirmation before arming. (No confusing Force toggles are presented).
+6. **Given** the user confirms the selection, **When** the schedule activates, **Then** the main screen displays the active action, a live ticking countdown, the scheduled completion timestamp, and a status indicator ("ARMED / RUNNING").
+
+---
+
+### User Story 2 - Safe Operation Cancellation with Guardrails (Priority: P1)
+
+A user with an active scheduled power action decides to cancel it. To avoid accidental keystrokes cancelling an essential planned shutdown, the application requires deliberate two-step confirmation before disarming the schedule.
+
+**Why this priority**: Accidental cancellation or accidental execution both cause data loss or workflow disruption. Guardrails are critical for system power utilities.
+
+**Independent Test**: While a 10-minute shutdown is counting down, press the Cancel key (`c` or `Esc`), verify a confirmation prompt appears, confirm cancellation (`y` or Enter), and verify the countdown halts, the OS abort command is sent if applicable, and the status returns to Idle.
+
+**Acceptance Scenarios**:
+
+1. **Given** an active countdown is displayed, **When** the user presses the designated cancel shortcut (e.g., `c` or `Esc`), **Then** a warning modal appears asking "Are you sure you want to cancel the scheduled [Action]?".
+2. **Given** the cancellation confirmation modal is visible, **When** the user selects "No" or presses `Esc`, **Then** the modal closes and the countdown continues seamlessly without timing drift.
+3. **Given** the cancellation modal is visible, **When** the user selects "Yes" (confirming cancellation), **Then** any OS-level timer (such as `shutdown /a`) is invoked, background tasks are disarmed, state file is cleared, and the UI displays a clear "Schedule Cancelled" notification before returning to the main menu.
+
+---
+
+### User Story 3 - Persistent Background Execution & Single-Schedule Re-attach (Priority: P2)
+
+Only a single active schedule may exist at any time. When a power action is scheduled and active, closing the terminal window does not abort the operation; a headless background worker keeps running. Re-launching Smart Power immediately attaches to the live active countdown.
+
+**Why this priority**: Users need background execution without keeping open terminal windows, while single-schedule enforcement prevents conflicting race conditions between power actions.
+
+**Independent Test**: Schedule a 3-minute Lock action, close the TUI window completely, verify in background processes that the worker continues, reopen Smart Power after 1 minute, and verify it resumes at 2 minutes remaining.
+
+**Acceptance Scenarios**:
+
+1. **Given** a scheduled operation is active, **When** the user closes the TUI window (via window close button, `q`, or `Ctrl+C`), **Then** a persistent background scheduler worker remains active and the state file (`%LOCALAPPDATA%\SmartPower\state.json`) maintains schedule metadata.
+2. **Given** an active background schedule exists, **When** the user relaunches Smart Power, **Then** the application detects the existing schedule, bypasses the setup wizard, and opens directly into the live countdown screen with accurate remaining time.
+3. **Given** an active schedule is counting down, **When** the user wants to schedule a different action, **Then** they must first cancel the active schedule through the confirmation guardrail.
+4. **Given** the machine reboots or shuts down (manually or via other means) before the scheduled time arrives, **When** the system boots back up, **Then** the prior schedule is deemed terminated/expired and will NOT re-arm or execute.
+
+---
+
+### User Story 4 - Unsaved Work Protection & 2-Minute Extension Policy on Blocked Actions (Priority: P2)
+
+When the scheduled execution time arrives, Smart Power attempts standard execution (without force) so running applications have an opportunity to save data or close normally. If the initial non-forced shutdown/restart is blocked or rejected (e.g. by Windows detecting unsaved documents or applications refusing to close), Smart Power does NOT abort; instead, it presents an urgent alert, grants an extra 2 minutes (120 seconds added to the scheduled time) for the user to save files, and clearly displays this extension. After this 2-minute grace period expires, Smart Power re-attempts the operation using the Force flag (`/f`) to deterministically execute the requested action.
+
+**Why this priority**: Balances data safety with execution certainty: users get a chance to save files if a block occurs, but the scheduled operation is guaranteed to finish without being silently ignored.
+
+**Independent Test**: Schedule a shutdown with a blocking application; verify the initial non-force attempt detects the block, transitions state to grace period, extends target time by 120 seconds, alerts the user, and upon grace expiration, executes with `/f`.
+
+**Acceptance Scenarios**:
+
+1. **Given** an active schedule reaches target time, **When** the standard (non-force) action succeeds and Windows shuts down/restarts smoothly, **Then** no grace period is needed and the operation finishes immediately.
+2. **Given** an active schedule reaches target time, **When** the non-force action is blocked or fails due to open unsaved files/applications, **Then** Smart Power grants an extra 2 minutes ("2-minute grace period added to save your work"), emits an urgent alert/notification, and updates the countdown.
+3. **Given** the 2-minute extension is active, **When** the user manually resolves/saves or chooses to cancel, **Then** the user retains full control during those 120 seconds.
+4. **Given** the 2-minute extension expires, **When** the grace period reaches zero, **Then** Smart Power re-executes the power action with the Force flag (`/f`), guaranteeing execution even if applications are still blocking.
+
+---
+
+### User Story 5 - Overdue Wake-Up & Sleep State Handling (Priority: P3)
+
+If the machine enters Sleep or Standby during an active countdown and wakes up after the scheduled target time has already passed, the operation is automatically aborted rather than firing late.
+
+**Why this priority**: Executing an overdue shutdown unexpectedly when a user reopens their laptop hours later is disruptive and dangerous.
+
+**Independent Test**: Set a schedule for 5 minutes, put PC to sleep for 10 minutes, wake PC; verify Smart Power detects `current_time > target_time`, cancels the power action, and alerts the user.
+
+**Acceptance Scenarios**:
+
+1. **Given** an active schedule, **When** the PC wakes from Sleep/Standby and the system clock indicates `datetime.now() > target_time`, **Then** Smart Power does NOT trigger the power action.
+2. **Given** an overdue wake-up condition, **When** the app is opened or background worker checks state, **Then** the schedule status is transitioned to "Cancelled (Overdue after system wake)", notifying the user.
+
+---
+
+### Edge Cases
+
+- **Midnight Rollover**: An exact time input earlier than the current time (e.g., current time is 22:30, user inputs 01:15) is scheduled for the following day, displaying "+1 day / Tomorrow at 01:15" explicitly.
+- **External Cancellation**: If an external command (e.g., manual `shutdown /a` run in CMD) cancels an active shutdown, Smart Power catches this, cleans up the state file, and notifies the user.
+- **System Reboot Prior to Target**: If Windows reboots before the target time, the schedule is treated as void on next launch and will not run.
+- **Terminal Resize / Small Dimensions**: The TUI supports standard terminal sizes (80x24 minimum) gracefully without line clipping or buffer overflow.
+- **Rapid Keystrokes & Key Buffering**: Double-tapping Enter on confirmation screens does not cause duplicate worker spawns.
+
+---
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+- **FR-001**: System MUST provide an interactive Terminal User Interface (TUI) navigable via keyboard (Arrow keys, Enter, Tab, Escape, and clear alphanumeric hotkeys).
+- **FR-002**: System MUST support two primary time scheduling modes:
+  - Relative duration in minutes or hours (e.g., 30m, 2h).
+  - Exact 12-hour or 24-hour clock time (e.g., `15:00`, `3:30 PM`), rolling over to next day (+24h) if the time has already passed today.
+- **FR-003**: System MUST support the following core power actions on Windows:
+  - **Shutdown**: Powered off (`shutdown /s /t ...`).
+  - **Restart**: Reboots the system (`shutdown /r /t ...`).
+  - **Sleep**: Places machine into ACPI S3 or Modern Standby via native Windows API call (`Powrprof.dll` / `ctypes`).
+  - **Lock**: Locks current Windows user session (`LockWorkStation` via `user32.dll`).
+- **FR-004**: System MUST enforce a Single Active Schedule policy: only one power action may be armed at any time. Opening the TUI while a schedule is active MUST immediately present the live countdown view.
+- **FR-005**: System MUST require explicit user confirmation before arming a schedule. The confirmation dialog MUST display the target action, exact execution timestamp, and remaining duration. (No force switch in initial setup).
+- **FR-006**: System MUST transition to an active status screen upon confirmation, showing:
+  - High-contrast countdown timer (`HH:MM:SS`).
+  - Current status badge (`[● ACTIVE SCHEDULE]`).
+  - Target trigger timestamp.
+  - Active action name.
+  - Clear cancellation shortcut reminder (`Press [C] or [Esc] to Cancel`).
+- **FR-007**: System MUST provide a two-step cancellation procedure requiring positive user confirmation (`y` / Enter) to abort an active schedule.
+- **FR-008**: System MUST persist active schedule state to disk (`%LOCALAPPDATA%\SmartPower\state.json`) so that closing the visible TUI does not terminate the schedule.
+- **FR-009**: System MUST spawn a detached, lightweight background execution agent on Windows that executes the target action even if the main TUI process is closed.
+- **FR-010**: System MUST NOT re-arm or execute a schedule after a Windows reboot; boot-time detection marks any pre-existing schedule as expired.
+- **FR-011**: System MUST cancel the scheduled action if the system was in sleep mode and wakes up after the target time has elapsed (`current_time > target_time`), informing the user with an alert.
+- **FR-012**: System MUST implement the Conditional 2-Minute Extension Policy for destructive actions (Shutdown, Restart):
+  - At the scheduled target time, the system attempts normal execution without force (`force=False`).
+  - If the operation is blocked by running applications or unsaved documents, the system triggers the 2-Minute Extension: emits an alert to the user, adds 120 seconds to the countdown, and updates state.
+  - If the initial attempt is not blocked, the operation completes immediately without any 2-minute delay.
+  - After the 2-minute extension expires, the system re-attempts execution with Force (`force=True` / `/f`), ensuring the system powers down or restarts deterministically.
+- **FR-013**: System MUST strictly adhere to the following visual style:
+  - Primary Background: Pure black (`#000000`).
+  - Primary Content / Borders: Deep blue, bright blue, and crisp white.
+  - Accent Color 1 (Purple): Subtle accents, titles, badges, or category dividers.
+  - Accent Color 2 (Orange): Warning indicators, 2-minute extension notice, and cancellation alerts.
+  - External TUI libraries (e.g., `rich`, `windows-curses`, or `textual`) are permitted to ensure superior visual quality and responsive rendering.
+- **FR-014**: System MUST render all user-facing strings, prompts, menus, dialogues, and notifications exclusively in English.
+- **FR-015**: System MUST never crash with raw Python tracebacks; all input parsing errors, OS permission denials, and execution errors must be caught and rendered as clean English dialogue boxes or status messages.
+
+---
+
+### Key Entities
+
+- **PowerAction**: Defines a system power operation:
+  - `id`: `"shutdown"`, `"restart"`, `"sleep"`, `"lock"`.
+  - `display_name`: English label (e.g., `"Shutdown System"`).
+  - `description`: Summary of what happens to the PC.
+  - `requires_elevation`: Boolean flag.
+  - `execute_fn`: Callable executing the Windows native command (supports `force=True` parameter).
+  - `abort_fn`: Callable that safely aborts the active command (e.g., `shutdown /a`).
+
+- **ScheduleDefinition**:
+  - `mode`: `RELATIVE` or `EXACT`.
+  - `target_time`: Python `datetime` object indicating execution moment.
+  - `duration_seconds`: Total seconds from confirmation to target.
+  - `action`: Associated `PowerAction`.
+
+- **ActiveScheduleState**:
+  - `schedule_id`: Unique UUID or timestamp token.
+  - `action_id`: String matching the chosen `PowerAction`.
+  - `target_timestamp`: ISO 8601 string of execution time.
+  - `created_timestamp`: ISO 8601 string of creation time.
+  - `grace_period_granted`: Boolean flag indicating if 2-minute extension was triggered.
+  - `status`: `"ACTIVE"`, `"CANCELLED"`, `"COMPLETED"`, `"EXPIRED_SLEEP"`, `"FAILED"`.
+
+---
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: A user can launch the tool, configure a scheduled power action, and confirm it in fewer than 10 seconds or under 6 keystrokes.
+- **SC-002**: The background scheduler consumes under 25 MB of RAM and negligible CPU (< 0.1%) while in idle countdown.
+- **SC-003**: 100% of cancellation requests require a confirmation gate; accidental single keystrokes do not drop the schedule.
+- **SC-004**: Closing the interactive terminal window preserves the schedule; reopening the app within the countdown window restores the live countdown with < 1 second display sync.
+- **SC-005**: If system wakes up overdue, 0 destructive power actions are triggered; the schedule cleanly aborts with a diagnostic notice.
+- **SC-006**: In the event of open unsaved blockers at trigger time, a 2-minute extension is granted and clearly displayed, followed by deterministic forced execution.
+- **SC-007**: All UI text, error dialogues, and notifications are 100% in English with zero raw stack traces exposed to the end user.
+
+---
+
+## Assumptions
+
+- Target operating system is Windows 10 (version 1903+) or Windows 11.
+- Standard Python 3.10+ execution environment.
+- External libraries like `rich` or `prompt_toolkit` or `textual` may be used for rendering the high-contrast TUI, while keeping the background scheduler minimal and decoupled.
