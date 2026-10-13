@@ -1,0 +1,117 @@
+# Data Model: Smart Power TUI
+
+**Feature**: `001-tui-power-scheduler`  
+**Phase**: Phase 1 (Data & State Modeling)  
+**Date**: 2026-09-30
+
+---
+
+## 1. Core Enumerations
+
+### `PowerActionType`
+```python
+from enum import Enum
+
+class PowerActionType(str, Enum):
+    SHUTDOWN = "shutdown"
+    RESTART = "restart"
+    SLEEP = "sleep"
+    LOCK = "lock"
+```
+
+### `ScheduleMode`
+```python
+class ScheduleMode(str, Enum):
+    RELATIVE = "relative"   # e.g., 25 minutes
+    EXACT = "exact"         # e.g., 15:30 (3:30 PM)
+```
+
+### `ScheduleStatus`
+```python
+class ScheduleStatus(str, Enum):
+    ARMED = "armed"                 # Countdown is actively running
+    GRACE_PERIOD = "grace_period"   # 2-minute unsaved work extension is active
+    COMPLETED = "completed"         # Power action was triggered successfully
+    CANCELLED = "cancelled"         # Cancelled by user
+    EXPIRED_SLEEP = "expired_sleep" # Cancelled due to overdue wake-up
+    FAILED = "failed"               # Failed to execute (error recorded)
+```
+
+---
+
+## 2. Entities & Schemas
+
+### `ActiveSchedule`
+Represents the in-memory and on-disk persisted state of a power action schedule.
+
+```python
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from typing import Optional
+
+@dataclass
+class ActiveSchedule:
+    schedule_id: str                   # Unique UUID string
+    action: PowerActionType            # Target power action
+    mode: ScheduleMode                 # exact or relative
+    target_time_iso: str               # ISO 8601 string of execution time (local time)
+    created_at_iso: str                # ISO 8601 string of creation time
+    status: ScheduleStatus             # Current status
+    grace_period_granted: bool = False # Whether the 2-minute extension was triggered
+    original_target_iso: Optional[str] = None # Preserves original time if extended
+    worker_pid: Optional[int] = None   # Background worker process PID
+    error_message: Optional[str] = None# Human-readable error if status is FAILED/EXPIRED_SLEEP
+
+    @property
+    def target_datetime(self) -> datetime:
+        return datetime.fromisoformat(self.target_time_iso)
+
+    @property
+    def remaining_seconds(self) -> float:
+        return (self.target_datetime - datetime.now()).total_seconds()
+```
+
+---
+
+## 3. Persisted JSON Format (`state.json`)
+
+Saved at `%LOCALAPPDATA%\SmartPower\state.json`:
+
+```json
+{
+  "version": 1,
+  "schedule_id": "sp-20260930-154500-a1b2",
+  "action": "shutdown",
+  "mode": "relative",
+  "target_time_iso": "2026-09-30T16:10:00",
+  "created_at_iso": "2026-09-30T15:45:00",
+  "status": "armed",
+  "grace_period_granted": false,
+  "original_target_iso": null,
+  "worker_pid": 14208,
+  "error_message": null
+}
+```
+
+---
+
+## 4. State Transitions
+
+```
+[IDLE / NO SCHEDULE]
+       │
+       ▼ (User confirms in TUI)
+    [ARMED]
+       │
+       ├─────────────────────────┬───────────────────────────┬──────────────────────┐
+       │ (User confirms cancel)  │ (Target time reached)     │ (System sleeps &     │ (Reboot/crash:
+       ▼                         ▼                           │  wakes overdue)      │  worker PID gone)
+  [CANCELLED]          [EXECUTION ATTEMPT]                   ▼                      ▼
+                             │                          [EXPIRED_SLEEP]         [CANCELLED/EXPIRED]
+                             ├────────────────────────────────┐
+                             ▼ (Success: unblocked)           ▼ (Blocked by unsaved files)
+                        [COMPLETED]                      [GRACE_PERIOD (+120s)]
+                                                              │
+                                                              ▼ (Grace expired)
+                                                         [COMPLETED] (Forced /f)
+```

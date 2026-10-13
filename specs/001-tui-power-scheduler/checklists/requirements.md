@@ -1,0 +1,64 @@
+# Requirements Quality Checklist: Smart Power TUI Power Action Scheduler
+
+**Purpose**: Systematic requirements-quality review verifying completeness, clarity, safety, and testability of the Smart Power specification.  
+**Created**: 2026-09-30  
+**Feature**: [specs/001-tui-power-scheduler/spec.md](spec.md)  
+**Review Ownership**: Reviewer-owned quality gate. Mark `[x]` only when the requirement is fully validated against the specification and architectural design.
+
+---
+
+## 1. Time Scheduling & Calculations
+
+- [x] **CHK001**: Exact clock time input format (12h with AM/PM and 24h `HH:MM`) is explicitly specified with concrete validation rules.
+- [x] **CHK002**: Past-time rollover behavior is unambiguous (if requested time has passed today, target date rolls over to tomorrow, +24h).
+- [x] **CHK003**: Relative duration input syntax (minutes, hours) has upper and lower bounds (1 minute to 1440 minutes) preventing zero or negative values.
+- [x] **CHK004**: System clock reference uses absolute wall-clock timestamps (`target_datetime`) rather than ticking sleep deltas to prevent drift across system stutters.
+- [x] **CHK005**: Boundary time cases (midnight `00:00`, midday `12:00`, end of month, and leap days) are accounted for via Python's standard `datetime`.
+
+---
+
+## 2. Operation Safety, Guardrails & Execution Policy
+
+- [x] **CHK006**: Confirmation step before arming any schedule is mandatory, displaying target action, formatted completion time, and remaining duration.
+- [x] **CHK007**: Initial confirmation dialog excludes confusing force switches, ensuring standard user-friendly setup.
+- [x] **CHK008**: Cancellation requires a dedicated 2-step confirmation modal (`c` / `Esc` -> `y`/Enter) preventing accidental disarming.
+- [x] **CHK009**: Destructive actions (Shutdown, Restart) enforce the conditional 2-minute extension policy: initial execution runs without force; only if blocked by unsaved applications, an alert is displayed and 120 seconds added before applying `/f` (Force).
+- [x] **CHK010**: Non-destructive actions (Lock, Sleep) execute safely without destructive data loss concerns.
+- [x] **CHK011**: Abort mechanisms for Windows timers (`shutdown.exe /a`) are tied directly to schedule cancellation and clean state deletion.
+
+---
+
+## 3. Concurrency & Lifecycle Persistence
+
+- [x] **CHK012**: Single Active Schedule constraint is strictly enforced; attempting to schedule another operation while one is armed is disallowed until cancelled.
+- [x] **CHK013**: Closing the visible interactive TUI (`q`, window close, `Ctrl+C`) does not terminate or abort the scheduled operation.
+- [x] **CHK014**: Headless background execution is handled via a detached worker process (`DETACHED_PROCESS`), requiring zero administrative service installation.
+- [x] **CHK015**: Re-opening Smart Power while a schedule is active immediately bypasses the setup wizard and binds to the active countdown.
+- [x] **CHK016**: Machine reboot before the target time voids the schedule; reboot detection guarantees old schedules do not unexpectedly fire on subsequent boots.
+- [x] **CHK017**: Machine sleep/wake behavior is handled cleanly: if the machine wakes up after the target time has elapsed (`now > target_time`), the action is cancelled with an overdue alert rather than firing late.
+
+---
+
+## 4. Error Handling, Permissions & Windows Failures
+
+- [x] **CHK018**: OS command failures and permission denials (e.g., UAC elevation restrictions) are caught and reported in clean English dialogs with zero raw tracebacks.
+- [x] **CHK019**: State persistence `%LOCALAPPDATA%\SmartPower\state.json` uses atomic writes (`os.replace`) to prevent corrupted or truncated reads.
+- [x] **CHK020**: Missing, empty, or corrupted state files are recovered safely by resetting to idle state without crashing.
+- [x] **CHK021**: Terminal window resize events down to standard 80x24 dimensions render cleanly without text truncation or visual artifacts.
+
+---
+
+## 5. Visual Hierarchy, Usability & Extensibility
+
+- [x] **CHK022**: Color scheme conforms to the strict palette: pure black background (`#000000`), blue and white primary elements, purple accent dividers/titles, and orange alert banners.
+- [x] **CHK023**: 100% of user-facing copy, labels, dialogues, notifications, and menu hotkeys are written in clear English.
+- [x] **CHK024**: Full keyboard accessibility is verified: Arrow keys, Enter, Esc, C, Q, and Tab provide complete control without requiring a mouse.
+- [x] **CHK025**: Power action architecture follows a pluggable registry pattern (`PowerActionHandler`), allowing future actions (e.g., Hibernate, Sign Out) to be added without modifying the TUI or scheduler core.
+
+---
+
+## 6. Testability & Measurable Acceptance
+
+- [x] **CHK026**: A dry-run execution mode (`SMART_POWER_DRY_RUN=1`) is available so that automated test suites and reviewers can exercise the entire pipeline without powering off the host computer.
+- [x] **CHK027**: Clear measurable success criteria are established (configuration in < 10 seconds, background worker RAM < 15 MB, countdown refresh rate at 1 Hz).
+- [x] **CHK028**: Independent unit tests cover time rollover math, state serialization, mock Windows operations, and worker state transitions.
